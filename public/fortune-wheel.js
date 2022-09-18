@@ -214,6 +214,19 @@
         static GetResource(id) {
             return ResourceManager.resources[id];
         }
+
+        static LoadURLTexture(url, listener)
+        {
+            const img = new Image;
+            img.src = url;
+            img.onload = () => {
+                listener.OnTextureLoaded( img );
+            };
+
+            img.onerror = (error) => {
+                listener.OnTextureLoadError(error);
+            };
+        }
     }
 
     class WheelFactory
@@ -489,9 +502,10 @@
 
 	class BGLinesFixer extends GameObject
 	{
+
 		OnInit()
 		{
-			
+			this.edgeImg = ResourceManager.GetResource('default').getImage('38.png');
 		}
 		
 		update()
@@ -505,16 +519,16 @@
 			ctx.fillStyle = "#BF9A7F";
 			ctx.save();
 			
-			ctx.fillRect(0, -10, canvas.width/2 - 2, 20);
+			ctx.fillRect(0, -10, this.edgeImg.width - 38, 20);
 
 			ctx.rotate(Math.PI/2);			
-			ctx.fillRect(0, -10, canvas.width/2 - 2, 20);
+			ctx.fillRect(0, -10, this.edgeImg.width - 38, 20);
 			
 			ctx.rotate(Math.PI/2);
-			ctx.fillRect(0, -10, canvas.width/2 - 2, 20);
+			ctx.fillRect(0, -10, this.edgeImg.width - 38, 20);
 			
 			ctx.rotate(Math.PI/2);
-			ctx.fillRect(0, -10, canvas.width/2 - 2, 20);
+			ctx.fillRect(0, -10, this.edgeImg.width - 38, 20);
 			
 			ctx.fillStyle = currCol;
 			ctx.restore();
@@ -682,8 +696,6 @@
 
             let w = -this.texture.width;
 
-
-
             ctx.save();
             ctx.rotate(-this.angleNum * 2 * Math.PI / 8 );
             
@@ -711,6 +723,154 @@
         }
     }
 
+    class ImgFrame extends GameObject
+    {
+        constructor(width, height)
+        {
+            super();
+            this.width   = width;
+            this.height  = height;
+            this.texture = null;
+            this.wImg = null;
+            this.hImg = null;
+            this.alphaFactor = null;
+
+            this._debug = false;
+        }
+
+        setTexture(texture)
+        {
+            this.texture = texture;
+            const wsrc = texture.width;
+            const hsrc = texture.height;
+            const aRatio = wsrc / hsrc;
+            
+            this.wImg = wsrc;
+            this.hImg = this.wImg / aRatio;
+            
+            if ( aRatio < 1 ) 
+                this.alphaFactor = this.height / this.hImg;
+            else
+                this.alphaFactor = this.width / this.wImg;
+        }
+
+        getWidth()
+        {
+            return this.width;
+        }
+
+        getHeight()
+        {
+            return this.height;
+        }
+
+        OnInit()
+        {
+            
+        }
+
+        draw()
+        {
+            const currStyle = ctx.fillStyle;
+            
+            ctx.save();
+            if ( this._debug )
+            {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+            }
+
+            ctx.scale(this.alphaFactor, this.alphaFactor);
+            
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(this.texture, -this.wImg/2, -this.hImg/2, this.wImg, this.hImg);
+            ctx.fillStyle = currStyle;
+            ctx.restore();
+        }
+
+        update()
+        {
+
+        }
+    } // class ImgFrame
+
+    class WinningItem extends GameObject
+    {
+        constructor(pendingTexture, roundItem, itemDistance)
+        {
+            super();
+            this.itemDistance = itemDistance;
+            this.pendingTexture = pendingTexture;
+            this.roundItem = roundItem;
+            this.texture = this.pendingTexture;
+            this._imgFrame = new ImgFrame(100, 100);
+            this._imgFrame.setTexture(this.texture);
+
+            this._ready = false; // ready only if texture has been loaded.
+
+            ResourceManager.LoadURLTexture(this.roundItem.getImage(), this);
+        }
+
+        OnTextureLoaded(texture)
+        {
+            this.texture = texture;
+            this._imgFrame.setTexture(this.texture);
+            this._ready = true;
+        }
+
+        OnTextureLoadError(error)
+        {
+            this._ready = true;
+        }
+
+        isReady()
+        {
+            return this._ready;
+        }
+
+        draw()
+        {
+            ctx.save();
+    
+            ctx.globalAlpha = .9;
+            const stepAngle = 2*Math.PI/8;
+            const angle = -stepAngle * this.roundItem.position;
+            
+            const newAngle = angle;
+
+            ctx.rotate( newAngle );
+
+            const coords = ArrowCoordinate([0, 1], stepAngle, [this.itemDistance, this.itemDistance], this.roundItem.position);
+            ctx.translate(coords[0], coords[1]);
+
+            
+            const texture = this.texture;
+
+            
+            ctx.rotate( -newAngle );
+
+            ctx.save();
+            const mx = ctx.getTransform();
+            // REMOVE Isometry view since winning items textures are already isometric.
+            ctx.setTransform( 1 * SCALE_FACTOR, 0, 0, 1 * SCALE_FACTOR, mx.e, mx.f );
+
+            // ctx.drawImage(texture, -texture.width/2, -texture.height/2);
+
+            this._imgFrame.draw(); 
+
+            ctx.restore();
+        
+            ctx.restore();
+
+            // ctx.globalAlpha = 1;
+        }
+
+        update()
+        {
+            this._imgFrame.update();
+        }
+    }
+
     class WinningItemsLayer extends GameObject
     {
         constructor(defaultImg)
@@ -718,17 +878,24 @@
             super();
             this.defaultImg = defaultImg;
             this.itemDistance = 112;
+            this.res = ResourceManager.GetResource('default');
         }
+
         OnInit()
         {
             this.items = [];
-            this.setDefaultItems();
+            this.pendingTexture = this.res.getImage(this.defaultImg);
         }
-
-        setDefaultItems()
+        
+        updateWinningItems()
         {
-            for ( let i = 0; i < 8; ++i )
-                this.items[i] = {wheelIndex: i, img: this.defaultImg};
+            this.items = [];
+
+            const round = fortuneWheel.getGameRounds().getCurrentRound();
+            const roundItems = round.getItems();
+            
+            for( const roundItem of roundItems )
+                this.items.push(new WinningItem(this.pendingTexture, roundItem, this.itemDistance));
         }
 
         draw()
@@ -736,36 +903,7 @@
             if ( fortuneWheel.isEnabled() )
             {
                 for ( const item of this.items )
-                {                 
-                    ctx.save();
-    
-                    ctx.globalAlpha = .8;
-                    const stepAngle = 2*Math.PI/8;
-                    const angle = -stepAngle * item.wheelIndex;
-                    
-                    const newAngle = angle;
-    
-                    ctx.rotate( newAngle);
-                    const arrowImg = ResourceManager.GetResource('default').getImage('11.png');
-    
-                    const coords = ArrowCoordinate([0, 1], stepAngle, [this.itemDistance, this.itemDistance], item.wheelIndex);
-                    ctx.translate(coords[0], coords[1]);
-    
-                    
-                    const texture = ResourceManager.GetResource('default').getImage(item.img);
-                    
-                    
-                    ctx.rotate( -newAngle );
-    
-                    ctx.save();
-                    const mx = ctx.getTransform();
-                    // REMOVE Isometry view since winning items textures are already isometric.
-                    ctx.setTransform( 1 * SCALE_FACTOR, 0, 0, 1 * SCALE_FACTOR, mx.e, mx.f );
-                    ctx.drawImage(texture, -texture.width/2, -texture.height/2);
-                    ctx.restore();
-                
-                    ctx.restore();
-                }
+                    item.draw();
                 
                 ctx.globalAlpha = 1;
             }
@@ -801,11 +939,6 @@
         getWinningItemsLayer()
         {
             return this.winningItemsLayer;
-        }
-
-        updateWinningItems()
-        {
-
         }
 
         turnArrow(index)
@@ -863,6 +996,145 @@
         }
     }
 
+    class RoundItem
+    {
+        constructor(name, position, image, odd)
+        {
+            this.name      = name;
+            this.position  = position; // position index on the wheel;
+            this.image     = image;
+            this.odd       = odd; // probability of winning the item.
+        }
+
+        getName()
+        {
+            return this.name;
+        }
+
+        getPosition()
+        {
+            return this.position;
+        }
+
+        getImage()
+        {
+            return this.image;
+        }
+
+        getOdd()
+        {
+            return this.odd;
+        }
+    } // RoundItem
+
+    class Round
+    {
+        constructor(items)
+        {
+            this._items = items;
+        }
+
+        getItems()
+        {
+            return this._items;
+        }
+    } // class Round
+
+    class GameRounds
+    {
+        static NO_ROUNDS    = 'NO_ROUNDS';
+        static NO_ROUND     = 'NO_ROUND';
+        static VALID_ROUND  = 'VALID_ROUND';
+        static VALID_ROUNDS = 'VALID_ROUNDS';
+
+        constructor()
+        {
+            this._rounds       = [];
+            this._listener     = null;
+            this._currentRound = null;
+        }
+
+        setListener( listener )
+        {
+            this._listener = listener;
+        }
+
+        getListener()
+        {
+            return this._listener;
+        }
+
+        loadRounds()
+        {
+            this._rounds = [];
+
+            // put some random data
+            
+            this._rounds.push(new Round(
+                [ 
+                    new RoundItem("dragon", 0, "resources/furnis/410.png", 1), 
+                    new RoundItem("dragon", 1, "resources/furnis/610.png", 1), 
+                    new RoundItem("dragon", 2, "resources/furnis/910.png", 1), 
+                    new RoundItem("dragon", 3, "resources/furnis/hween_68.png", 1), 
+                    new RoundItem("dragon", 4, "resources/furnis/hween_75.png", 1), 
+                    new RoundItem("dragon", 5, "resources/furnis/hween_81.png", 1), 
+                    new RoundItem("dragon", 6, "resources/furnis/hween_84.png", 1), 
+                    new RoundItem("dragon", 7, "resources/furnis/image241.png", 1)
+                ]
+            ));
+
+            this._rounds.push(
+                new Round(  
+                    [
+                        new RoundItem("dragon", 0, "dragon_image_url", 1), 
+                        new RoundItem("dragon", 1, "dragon_image_url", 1), 
+                        new RoundItem("dragon", 2, "dragon_image_url", 1), 
+                        new RoundItem("dragon", 3, "dragon_image_url", 1), 
+                        new RoundItem("dragon", 4, "dragon_image_url", 1), 
+                        new RoundItem("dragon", 5, "dragon_image_url", 1), 
+                        new RoundItem("dragon", 6, "dragon_image_url", 1), 
+                        new RoundItem("dragon", 7, "dragon_image_url", 1)
+                    ]              
+                )
+            );
+
+            this._rounds.push(new Round(   
+                [
+                    new RoundItem("dragon", 0, "dragon_image_url", 1), 
+                    new RoundItem("dragon", 1, "dragon_image_url", 1), 
+                    new RoundItem("dragon", 2, "dragon_image_url", 1), 
+                    new RoundItem("dragon", 3, "dragon_image_url", 1), 
+                    new RoundItem("dragon", 4, "dragon_image_url", 1), 
+                    new RoundItem("dragon", 5, "resources/frank.png", 1), 
+                    new RoundItem("dragon", 6, "resources/wheel-sh.png", 1), 
+                    new RoundItem("dragon", 7, "dragon_image_url", 1)
+                ]
+            ));
+
+            this._currentRound = 0; // round index.
+
+            let status = GameRounds.VALID_ROUNDS;
+
+            this._listener.onRoundsLoaded(status);
+        }
+
+        nextRound()
+        {
+            let status = GameRounds.NO_ROUND; 
+            if ( ++this._currentRound >= this._rounds.length )
+                this._currentRound--;
+            else
+                status = GameRounds.VALID_ROUND;
+
+            this._listener.onNextRound(status);
+        }
+
+        getCurrentRound()
+        {
+            return this._rounds[this._currentRound];
+        }
+    }
+
     class FortuneWheel
     {
         constructor()
@@ -884,11 +1156,16 @@
             this.spinningDuration = 5; // 5 seconds
             this.nextTime = 0;
             
-            this.winningItems = [];
-            this.enabled = false;
 
+            this.enabled = false;
             
-            this.loadWinningItem();
+            this.gameRounds = new GameRounds();
+            this.gameRounds.setListener(this);
+        }
+
+        getGameRounds()
+        {
+            return this.gameRounds;
         }
 
         isEnabled()
@@ -896,12 +1173,32 @@
             return this.enabled;
         }
 
-        loadWinningItem()
+        onRoundsLoaded(status)
         {
+            if ( status == GameRounds.NO_ROUNDS )
+            {
+                // do something.
+                this.enabled = false;
+                return;
+            }
 
+            this.enabled = true;
+
+            this.updateWheelDisplay();
         }
 
-        onWinningItemsLoaded()
+        onNextRound(status)
+        {
+            if ( status == GameRounds.NO_ROUND )
+            {
+                this.gameRounds.loadRounds();
+                return;
+            }
+
+            this.updateWheelDisplay();
+        }
+
+        updateWheelDisplay()
         {
             this.components['wheel-display'].getWinningItemsLayer().updateWinningItems();
         }
@@ -915,6 +1212,7 @@
         stopSpinning()
         {
             this.isSpinning = false;
+            this.gameRounds.nextRound();
         }
         
         getSpinningValue()
@@ -953,6 +1251,9 @@
                 this.components[cmp].OnInit();
                 this.components[cmp].setParentMatrix( this.matrix );
             }
+
+            
+            this.gameRounds.loadRounds();
             
             // this.spin();
         }
@@ -979,7 +1280,7 @@
             if ( this.isSpinning )
             {
                 if ( currentTime > this.nextTime )
-                    this.stopSpinning()
+                    this.stopSpinning();
             }
 
             for ( const cmp in this.components )
@@ -987,7 +1288,7 @@
         }
     }
 
-    const SCALE_FACTOR = .75; // .68 for isometric .75 for front
+    const SCALE_FACTOR = .85; // .68 for isometric .75 for front
     const VIEW_MODE = 'front';
     const canvas = document.createElement('canvas');
     const ctx   = canvas.getContext('2d');
@@ -1019,7 +1320,7 @@
         'default': new SpriteSheet('resources')
     };
     
-    const windowSize = { width: 572, height: 500 };
+    const windowSize = { width: 660, height: 660 };
     
     resizeCanvas(canvas, windowSize);
     init();
